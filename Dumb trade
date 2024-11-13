@@ -1,0 +1,120 @@
+from flask import Flask, request, jsonify
+import random
+import numpy as np
+from sklearn.linear_model import LogisticRegression
+
+app = Flask(__name__)
+
+# Operational balance for fees
+operational_balance = 0.0
+
+# User account balances
+user_balances = {}
+
+# Supported risk levels
+PORTFOLIOS = {
+    "low": ["BND", "AGG", "SHY"],
+    "medium": ["AAPL", "MSFT", "VOO"],
+    "high": ["TSLA", "NVDA", "ARKK"]
+}
+
+# Simulated historical data for AI predictions
+historical_data = {
+    "AAPL": [150, 152, 153, 151, 155, 157, 159],
+    "MSFT": [300, 305, 310, 307, 312, 315, 317],
+    "TSLA": [900, 890, 880, 895, 910, 920, 930]
+}
+
+def predict_market(symbol):
+    """Predict the next market movement using a simple AI model."""
+    prices = np.array(historical_data[symbol]).reshape(-1, 1)
+    changes = np.array([1 if prices[i] < prices[i+1] else 0 for i in range(len(prices)-1)])
+    
+    model = LogisticRegression()
+    model.fit(prices[:-1], changes)
+    
+    next_price = prices[-1][0] + random.uniform(-5, 5)
+    prediction = model.predict([[next_price]])
+    
+    return {"next_price": next_price, "movement": "up" if prediction[0] == 1 else "down"}
+
+@app.route('/connect', methods=['POST'])
+def connect():
+    """User connects their trading platform."""
+    data = request.json
+    user_id = data.get('user_id')
+    trading_api_url = data.get('api_url')
+    api_key = data.get('api_key')
+    initial_deposit = float(data.get('initial_deposit', 0.0))
+
+    if initial_deposit < 10.0:
+        return jsonify({"error": "Minimum deposit is $10."}), 400
+
+    user_balances[user_id] = {
+        "api_url": trading_api_url,
+        "api_key": api_key,
+        "balance": initial_deposit
+    }
+    return jsonify({"status": "success", "message": f"User {user_id} connected with ${initial_deposit} deposit."})
+
+@app.route('/trade', methods=['POST'])
+def trade():
+    """Automated trading using AI predictions."""
+    data = request.json
+    user_id = data.get('user_id')
+    risk_level = data.get('risk_level', 'medium')
+    portfolio = PORTFOLIOS.get(risk_level, PORTFOLIOS['medium'])
+
+    user_info = user_balances.get(user_id)
+    if not user_info:
+        return jsonify({"error": "User not connected to any trading platform."}), 400
+
+    if user_info["balance"] < 10.0:
+        return jsonify({"error": "Insufficient balance to trade. Minimum $10 required."}), 400
+
+    trades = []
+    for symbol in portfolio:
+        prediction = predict_market(symbol)
+        if prediction["movement"] == "up":
+            user_info["balance"] += 5
+            trades.append({
+                "symbol": symbol,
+                "action": "buy",
+                "result": "profit",
+                "new_balance": user_info["balance"]
+            })
+        else:
+            user_info["balance"] -= 0.01
+            trades.append({
+                "symbol": symbol,
+                "action": "sell",
+                "result": "small loss",
+                "new_balance": user_info["balance"]
+            })
+
+    return jsonify({"status": "success", "trades": trades})
+
+@app.route('/withdraw', methods=['POST'])
+def withdraw():
+    """Withdraw funds with fees applied."""
+    global operational_balance
+    data = request.json
+    user_id = data.get('user_id')
+    amount = float(data.get('amount', 0))
+    bank_account = data.get('bank_account')
+
+    user_info = user_balances.get(user_id, {})
+    if user_info and user_info.get("balance", 0) >= amount and amount >= 1.0:
+        fee = amount * 0.0001
+        final_withdrawal = amount - fee
+        operational_balance += fee
+        user_info["balance"] -= amount
+        return jsonify({
+            "status": "success",
+            "message": f"${final_withdrawal} withdrawn to {bank_account}. Fee: ${round(fee, 4)}",
+            "remaining_balance": user_info["balance"]
+        })
+    return jsonify({"error": "Insufficient balance or minimum withdrawal of $1 required."}), 400
+
+if __name__ == "__main__":
+    app.run(debug=True)
